@@ -186,6 +186,13 @@ func doAlterBackupSchedules(
 		return errors.Wrap(err, "failed to dry run backup")
 	}
 
+	
+	// Store original backup statements for change detection (issue #158296)
+	originalFullBackupStmt := tree.AsStringWithFlags(s.fullStmt, tree.FmtParsable|tree.FmtShowPasswords)
+	var originalIncBackupStmt string
+	if s.incStmt != nil {
+		originalIncBackupStmt = tree.AsStringWithFlags(s.incStmt, tree.FmtParsable|tree.FmtShowPasswords)
+	}
 	s.fullArgs.BackupStatement = tree.AsStringWithFlags(s.fullStmt, tree.FmtParsable|tree.FmtShowPasswords)
 	fullAny, err := pbtypes.MarshalAny(s.fullArgs)
 	if err != nil {
@@ -195,9 +202,11 @@ func doAlterBackupSchedules(
 	s.fullJob.SetExecutionDetails(
 		tree.ScheduledBackupExecutor.InternalName(),
 		jobspb.ExecutionArguments{Args: fullAny})
-	if err := scheduledJobs.Update(ctx, s.fullJob); err != nil {
-		return err
+	// Only update if the backup statement changed
+	if originalFullBackupStmt != s.fullArgs.BackupStatement {
+		if err := scheduledJobs.Update(ctx, s.fullJob); err != nil {		return err
 	}
+			}
 
 	if s.incJob != nil {
 		s.incArgs.BackupStatement = tree.AsStringWithFlags(s.incStmt, tree.FmtParsable|tree.FmtShowPasswords)
@@ -209,9 +218,12 @@ func doAlterBackupSchedules(
 			tree.ScheduledBackupExecutor.InternalName(),
 			jobspb.ExecutionArguments{Args: incAny})
 
-		if err := scheduledJobs.Update(ctx, s.incJob); err != nil {
-			return err
+	// Only update if the incremental backup statement changed
+		if originalIncBackupStmt != s.incArgs.BackupStatement {
+			if err := scheduledJobs.Update(ctx, s.incJob); err != nil {			return err
 		}
+					}
+	}
 
 		if err := emitAlteredSchedule(ctx, p, s.incJob, s.incStmt, resultsCh); err != nil {
 			return err
